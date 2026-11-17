@@ -13,7 +13,8 @@ use bevy_ecs::change_detection::Tick;
 use bevy_ecs::prelude::*;
 use bevy_input_focus::InputFocus;
 use bevy_math::Quat;
-use bevy_reflect::{ParsedPath, PartialReflect};
+use bevy_feathers::controls::ButtonVariant;
+use bevy_reflect::{ParsedPath, PartialReflect, ReflectRef};
 use bevy_text::EditableText;
 use bevy_ui::Checked;
 use bevy_ui_widgets::{Checkbox, NumericValue, SliderValue};
@@ -22,6 +23,8 @@ use crate::binding::{
     read_field, reflect_to_bool, reflect_to_f32, InspectorBinding, InspectorRoot,
 };
 use crate::color::ColorPicker;
+use crate::entry::{rebuild_panel, InspectorPanel};
+use crate::enums::EnumVariantButton;
 use crate::number::{euler_degrees, EulerAxis, NumberField};
 use crate::text::{replace_text, ShownText};
 
@@ -42,7 +45,60 @@ pub fn sync_inspector_widgets(world: &mut World, mut last_run: Local<Option<Tick
     sync_euler(world, &pass);
     sync_text(world, &pass);
     sync_color_pickers(world, &pass);
+    sync_enums(world, &pass);
     crate::val::sync_val_numbers(world, |world, root| pass.changed(world, root));
+}
+
+/// An enum whose variant was changed elsewhere (a preset loaded, a key that cycles a mode) is
+/// built again: the selector lights the variant it was built with and shows that variant's
+/// fields, so its panel is rebuilt as it is after a click on the selector.
+fn sync_enums(world: &mut World, pass: &Pass) {
+    let lit: Vec<(Entity, InspectorRoot, ParsedPath, String)> = {
+        let mut query = world.query::<(Entity, &EnumVariantButton, &ButtonVariant)>();
+        query
+            .iter(world)
+            .filter(|(.., variant)| **variant == ButtonVariant::Primary)
+            .filter_map(|(entity, button, _)| {
+                Some((
+                    entity,
+                    button.root?,
+                    button.path.clone(),
+                    button.variant.clone(),
+                ))
+            })
+            .collect()
+    };
+    let mut panels: Vec<Entity> = Vec::new();
+    for (entity, root, path, shown) in lit {
+        if !pass.changed(world, &root) {
+            continue;
+        }
+        let stale = read_field(world, &root, &path, |value| match value.reflect_ref() {
+            ReflectRef::Enum(value) => value.variant_name() != shown,
+            _ => false,
+        });
+        if stale != Some(true) {
+            continue;
+        }
+        let mut current = entity;
+        let panel = loop {
+            if world.get::<InspectorPanel>(current).is_some() {
+                break Some(current);
+            }
+            match world.get::<ChildOf>(current) {
+                Some(child_of) => current = child_of.parent(),
+                None => break None,
+            }
+        };
+        if let Some(panel) = panel
+            && !panels.contains(&panel)
+        {
+            panels.push(panel);
+        }
+    }
+    for panel in panels {
+        rebuild_panel(world, panel);
+    }
 }
 
 /// One sync pass: what has focus, and the tick window a root must have changed in.

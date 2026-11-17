@@ -29,9 +29,9 @@ use crate::recurse::{column, field_entry, parse_path, BuildCx};
 /// Records how to switch an enum to a specific variant when its button is clicked.
 #[derive(Component, Clone)]
 pub(crate) struct EnumVariantButton {
-    root: Option<InspectorRoot>,
-    path: ParsedPath,
-    variant: String,
+    pub(crate) root: Option<InspectorRoot>,
+    pub(crate) path: ParsedPath,
+    pub(crate) variant: String,
     enum_type_id: Option<TypeId>,
 }
 

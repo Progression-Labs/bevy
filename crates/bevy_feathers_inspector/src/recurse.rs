@@ -93,20 +93,149 @@ fn build_struct(
     let info = value
         .get_represented_type_info()
         .and_then(|i| i.as_struct().ok());
-    let rows: Vec<Box<dyn Scene>> = (0..strukt.field_len())
-        .filter_map(|i| {
-            let name = strukt.name_at(i)?;
-            let child = strukt.field_at(i)?;
-            let field_info = info.and_then(|si| si.field_at(i));
-            if field_info.is_some_and(FieldCtx::is_hidden) {
-                return None;
-            }
-            let child_field = field_info.map(FieldCtx::from_field).unwrap_or_default();
-            let child_path = format!("{path}.{name}");
-            Some(field_entry(cx, name, &child_path, child, &child_field))
-        })
-        .collect();
-    Box::new(column(rows))
+    // The struct's own rows and its groups ([`Group`]), each where its first field stands.
+    let mut body = Grouped::default();
+    for i in 0..strukt.field_len() {
+        let (Some(name), Some(child)) = (strukt.name_at(i), strukt.field_at(i)) else {
+            continue;
+        };
+        let field_info = info.and_then(|si| si.field_at(i));
+        if field_info.is_some_and(FieldCtx::is_hidden) {
+            continue;
+        }
+        let child_field = field_info.map(FieldCtx::from_field).unwrap_or_default();
+        let child_path = format!("{path}.{name}");
+        let entry = field_entry(cx, name, &child_path, child, &child_field);
+        let group = field_info.map(FieldCtx::group_of).unwrap_or_default();
+        body.at(&group).items.push(Item::Entry(entry));
+    }
+    Box::new(column(body.scenes(cx, path, "")))
+}
+
+/// A struct's body as it is laid out: rows and group cards in the order they first appear.
+#[derive(Default)]
+struct Grouped {
+    items: Vec<Item>,
+}
+
+enum Item {
+    Entry(Box<dyn Scene>),
+    Group(&'static str, Grouped),
+}
+
+impl Grouped {
+    /// The group at `group` below this one, made where it is first named.
+    fn at(&mut self, group: &[&'static str]) -> &mut Grouped {
+        let Some((first, rest)) = group.split_first() else {
+            return self;
+        };
+        let found = self
+            .items
+            .iter()
+            .position(|item| matches!(item, Item::Group(name, _) if name == first));
+        let at = found.unwrap_or_else(|| {
+            self.items.push(Item::Group(first, Grouped::default()));
+            self.items.len() - 1
+        });
+        match &mut self.items[at] {
+            Item::Group(_, inner) => inner.at(rest),
+            Item::Entry(_) => unreachable!("found a group there"),
+        }
+    }
+
+    /// The rows and cards of the struct at `path`; `within` is the group they are in
+    /// (`"Reuse/Temporal"`), empty at the struct's own body.
+    fn scenes(self, cx: &BuildCx, path: &str, within: &str) -> Vec<Box<dyn Scene>> {
+        self.items
+            .into_iter()
+            .map(|item| match item {
+                Item::Entry(entry) => entry,
+                Item::Group(name, inner) => {
+                    let group = if within.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{within}/{name}")
+                    };
+                    let body = Box::new(column(inner.scenes(cx, path, &group)));
+                    Box::new(attribute_group_card(cx, path, &group, name, body)) as Box<dyn Scene>
+                }
+            })
+            .collect()
+    }
+}
+
+/// On the card of a [`Group`](crate::attributes::Group) of a struct's fields, for an app that
+/// decorates it (how many of its rows are overridden, say). Its header carries
+/// [`InspectorGroupHeader`] and its body [`InspectorGroupBody`].
+#[derive(Component, Clone, Default)]
+pub struct InspectorGroup {
+    /// Where the struct lives (`None` only on a default-constructed marker).
+    pub root: Option<InspectorRoot>,
+    /// The reflection path from the root to the struct whose fields these are.
+    pub path: String,
+    /// The group, outermost first, `/` between (`"Reuse/Temporal"`).
+    pub group: String,
+}
+
+/// The header of an [`InspectorGroup`]'s card: the chevron and the title are its children.
+#[derive(Component, Clone, Default)]
+pub struct InspectorGroupHeader;
+
+/// The body of an [`InspectorGroup`]'s card, a column: what an app adds under it is shown and
+/// hidden with the group's own rows.
+#[derive(Component, Clone, Default)]
+pub struct InspectorGroupBody;
+
+/// The key a group's collapsed state goes by in [`InspectorCollapsed`]: the struct's path, then
+/// the group. No reflection path holds a `#`, so it is no field's key.
+pub fn group_key(path: &str, group: &str) -> String {
+    format!("{path}#{group}")
+}
+
+/// The card of a [`Group`](crate::attributes::Group): [`group_card`], marked for the app.
+fn attribute_group_card(
+    cx: &BuildCx,
+    path: &str,
+    within: &str,
+    title: &str,
+    body: Box<dyn Scene>,
+) -> impl Scene {
+    let key = group_key(path, within);
+    let collapsed = cx.collapsed.is_collapsed(&cx.root, &key);
+    let body_display = if collapsed {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    let marker = InspectorGroup {
+        root: Some(cx.root.clone()),
+        path: path.to_string(),
+        group: within.to_string(),
+    };
+    let header: Vec<Box<dyn Scene>> = vec![
+        collapse_toggle(&cx.root, &key, collapsed),
+        Box::new(label(title.to_string())),
+    ];
+    let content: Vec<Box<dyn Scene>> = vec![body];
+    bsn! {
+        @group()
+        CollapseGroup
+        marker
+        Node { width: percent(100) }
+        Children [
+            @group_header()
+            InspectorGroupHeader
+            Node { justify_content: JustifyContent::Start, column_gap: px(6) }
+            on(on_header_click)
+            Children [ {header} ]
+            --
+            @group_body()
+            CollapseBody
+            InspectorGroupBody
+            Node { width: percent(100), display: {body_display} }
+            Children [ {content} ]
+        ]
+    }
 }
 
 /// Recurse into a tuple struct, one entry per positional field.
@@ -127,8 +256,9 @@ fn build_tuple_struct(cx: &BuildCx, path: &str, tuple_struct: &dyn TupleStruct) 
     Box::new(column(rows))
 }
 
-/// On every field row: the value it edits, for an app that decorates rows (a keyframe toggle,
-/// an override marker).
+/// On every field row, and on the header of the card of a compound field (a struct, an enum, a
+/// list): the value it edits, for an app that decorates rows (a keyframe toggle, an override
+/// marker).
 #[derive(Component, Clone, Default)]
 pub struct InspectorField {
     /// Where the value lives (`None` only on a default-constructed marker).
@@ -250,6 +380,11 @@ pub(crate) fn group_card(
         Box::new(label(title.to_string())),
     ];
     let content: Vec<Box<dyn Scene>> = vec![body];
+    // A card's header is its row: what an app puts beside a scalar's row it puts here.
+    let marker = InspectorField {
+        root: Some(cx.root.clone()),
+        path: path.to_string(),
+    };
     bsn! {
         @group()
         CollapseGroup
@@ -259,6 +394,7 @@ pub(crate) fn group_card(
             // The chevron and the title read as one unit, so override the header's
             // space-between default.
             Node { justify_content: JustifyContent::Start, column_gap: px(6) }
+            marker
             on(on_header_click)
             Children [ {header} ]
             --

@@ -3,7 +3,8 @@
 //! Rather than a bespoke derive, the inspector reuses Bevy's own reflection attributes. A field
 //! annotated `#[reflect(@0.0..=1.0)]` gets a bounded slider, `#[reflect(@Step(0.01))]` its step
 //! (dragging and nudging a number by that much); `#[reflect(@ReadOnly)]` /
-//! `#[reflect(@Hidden)]` (the marker types below) control visibility and editability.
+//! `#[reflect(@Hidden)]` (the marker types below) control visibility and editability, and
+//! `#[reflect(@Group("Name"))]` puts a struct's field in a collapsible card of that name.
 
 use core::ops::RangeInclusive;
 
@@ -36,6 +37,18 @@ pub struct Hidden;
 #[derive(Reflect, Clone, Copy)]
 pub struct Step(pub f32);
 
+/// The group a struct's field is shown in: the fields of one group share a collapsible card
+/// titled with its name, where the group's first field stands among the struct's fields. A `/`
+/// nests a group inside another (`"Reuse/Temporal"` is the card Temporal inside the card Reuse).
+/// A field with none is a row of the struct's own body.
+///
+/// ```ignore
+/// #[reflect(@Group("Reuse/Temporal"))]
+/// history: f32,
+/// ```
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Group(pub &'static str);
+
 /// Per-field context threaded through the recursion, derived from a field's custom attributes.
 #[derive(Default, Clone)]
 pub struct FieldCtx {
@@ -55,6 +68,21 @@ impl FieldCtx {
             step: field.get_attribute::<Step>().map(|s| s.0),
             read_only: field.has_attribute::<ReadOnly>(),
         }
+    }
+
+    /// The group a field is shown in, outermost first; empty for a field with none.
+    pub fn group_of(field: &NamedField) -> Vec<&'static str> {
+        field
+            .get_attribute::<Group>()
+            .map(|group| {
+                group
+                    .0
+                    .split('/')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Whether a field with these attributes should be skipped entirely.

@@ -12,7 +12,8 @@
 //!
 //! Edits are written back through reflection paths by writeback observers, so `Changed<T>` fires
 //! on real edits. Per-field configuration reuses native `#[reflect(@...)]` attributes: a numeric
-//! range gives a bounded slider, and the [`ReadOnly`]/[`Hidden`] markers control fields.
+//! range gives a bounded slider, the [`ReadOnly`]/[`Hidden`] markers control fields, and
+//! [`Group`] gathers a long struct's fields into named cards, one inside another where wanted.
 //!
 //! Every card — a component section, or a nested struct/enum/list field — has a disclosure chevron
 //! that hides its body, so a deep component can be narrowed to the part you care about. See
@@ -37,7 +38,7 @@ pub mod text;
 pub mod val;
 pub mod widget;
 
-pub use attributes::{FieldCtx, Hidden, ReadOnly, Step};
+pub use attributes::{FieldCtx, Group, Hidden, ReadOnly, Step};
 pub use binding::{
     apply_edit, assign, clone_field, inspector_writeback_bool, inspector_writeback_slider,
     queue_edit, read_field, CustomRead, CustomWrite, InspectorBinding, InspectorEdits,
@@ -46,13 +47,15 @@ pub use binding::{
 pub use collapse::InspectorCollapsed;
 pub use color::{color_picker, ColorPicker};
 pub use entry::{
-    build_asset_inspector, build_body, build_body_at, build_component_inspector, build_field, build_custom_inspector,
-    build_entity_inspector, build_resource_inspector, find_ancestor_panel, rebuild_panel,
-    BuildAssetInspector, BuildComponentInspector, BuildCustomInspector, BuildEntityInspector,
-    BuildResourceInspector, InspectorPanel,
+    build_asset_inspector, build_body, build_body_at, build_component_inspector,
+    build_custom_inspector, build_entity_inspector, build_field, build_resource_inspector,
+    find_ancestor_panel, rebuild_panel, BuildAssetInspector, BuildComponentInspector,
+    BuildCustomInspector, BuildEntityInspector, BuildResourceInspector, InspectorPanel,
 };
 pub use enums::set_variant;
-pub use recurse::{build_value, BuildCx, InspectorField};
+pub use recurse::{
+    build_value, BuildCx, InspectorField, InspectorGroup, InspectorGroupBody, InspectorGroupHeader,
+};
 pub use widget::{
     DefaultInspectorWidgetsPlugin, FeathersInspectorPlugins, ReflectInspectorWidget, SliderScalar,
 };
