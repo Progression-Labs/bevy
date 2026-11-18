@@ -89,7 +89,7 @@ pub(crate) fn entity_component_sections(
         let Some(reflected) = reflect_component.reflect(world.entity(entity)) else {
             continue;
         };
-        let name = registration.type_info().ty().short_path();
+        let name = crate::attributes::title_of(registration.type_info());
         let root = InspectorRoot::Component { entity, type_id };
         sections.push(section_for(world, registry, root, name, reflected));
     }
@@ -131,7 +131,7 @@ pub(crate) fn component_section(
     let registration = registry.get(type_id)?;
     let reflect_component = registration.data::<ReflectComponent>()?;
     let reflected = reflect_component.reflect(world.get_entity(target).ok()?)?;
-    let name = registration.type_info().ty().short_path();
+    let name = crate::attributes::title_of(registration.type_info());
     let root = InspectorRoot::Component {
         entity: target,
         type_id,
@@ -195,7 +195,11 @@ pub fn build_field(
 fn rebuild_field(world: &mut World, root: InspectorRoot, path: &str, label: &str, panel: Entity) {
     clear_children(world, panel);
     if let Ok(mut panel_mut) = world.get_entity_mut(panel) {
-        panel_mut.insert(InspectorPanel::Field(root, path.to_string(), label.to_string()));
+        panel_mut.insert(InspectorPanel::Field(
+            root,
+            path.to_string(),
+            label.to_string(),
+        ));
     }
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
@@ -267,7 +271,7 @@ pub(crate) fn asset_section(
     let registration = registry.get(type_id)?;
     let reflect_asset = registration.data::<ReflectAsset>()?;
     let reflected = reflect_asset.get(world, asset_id)?;
-    let name = registration.type_info().ty().short_path();
+    let name = crate::attributes::title_of(registration.type_info());
     Some(section_for(
         world,
         registry,
@@ -305,7 +309,10 @@ pub fn build_custom_inspector(
             world,
             &registry,
             InspectorRoot::Custom { read, write },
-            reflected.reflect_short_type_path(),
+            reflected.get_represented_type_info().map_or(
+                reflected.reflect_short_type_path(),
+                crate::attributes::title_of,
+            ),
             reflected,
         ));
     });
@@ -330,7 +337,7 @@ pub(crate) fn resource_section(
         .get_id(type_id)
         .and_then(|id| world.resource_entities().get(id))?;
     let reflected = reflect_component.reflect(world.entity(resource_entity))?;
-    let name = registration.type_info().ty().short_path();
+    let name = crate::attributes::title_of(registration.type_info());
     Some(section_for(
         world,
         registry,

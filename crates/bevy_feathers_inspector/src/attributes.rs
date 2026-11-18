@@ -49,6 +49,27 @@ pub struct Step(pub f32);
 #[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Group(pub &'static str);
 
+/// What a type's card is titled with, in place of the type's name: on the type.
+///
+/// ```ignore
+/// #[derive(Component, Reflect)]
+/// #[reflect(@Title("Camera lens"))]
+/// struct Lens { .. }
+/// ```
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Title(pub &'static str);
+
+/// The title of a type's card: its [`Title`], or the type's short path.
+pub fn title_of(info: &bevy_reflect::TypeInfo) -> &'static str {
+    let titled = match info {
+        bevy_reflect::TypeInfo::Struct(info) => info.get_attribute::<Title>(),
+        bevy_reflect::TypeInfo::TupleStruct(info) => info.get_attribute::<Title>(),
+        bevy_reflect::TypeInfo::Enum(info) => info.get_attribute::<Title>(),
+        _ => None,
+    };
+    titled.map_or_else(|| info.ty().short_path(), |title| title.0)
+}
+
 /// Per-field context threaded through the recursion, derived from a field's custom attributes.
 #[derive(Default, Clone)]
 pub struct FieldCtx {

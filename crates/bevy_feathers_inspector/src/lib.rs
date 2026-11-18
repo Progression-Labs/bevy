@@ -38,7 +38,7 @@ pub mod text;
 pub mod val;
 pub mod widget;
 
-pub use attributes::{FieldCtx, Group, Hidden, ReadOnly, Step};
+pub use attributes::{title_of, FieldCtx, Group, Hidden, ReadOnly, Step, Title};
 pub use binding::{
     apply_edit, assign, clone_field, inspector_writeback_bool, inspector_writeback_slider,
     queue_edit, read_field, CustomRead, CustomWrite, InspectorBinding, InspectorEdits,
