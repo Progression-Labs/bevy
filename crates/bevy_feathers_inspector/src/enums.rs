@@ -56,10 +56,22 @@ pub fn build_enum(
     let enum_type_id = value
         .get_represented_type_info()
         .map(bevy_reflect::TypeInfo::type_id);
-    let variant_names: Vec<String> = value
+    // Each variant's name, and what its button reads: its `Title` where it has one
+    // (`#[reflect(@Title("E latest"))]` on the variant), else its name.
+    let variant_names: Vec<(String, String)> = value
         .get_represented_type_info()
         .and_then(|i| i.as_enum().ok())
-        .map(|ei| ei.variant_names().iter().map(ToString::to_string).collect())
+        .map(|ei| {
+            ei.iter()
+                .map(|variant| {
+                    let name = variant.name().to_string();
+                    let caption = variant
+                        .get_attribute::<crate::attributes::Title>()
+                        .map_or_else(|| name.clone(), |title| title.0.to_string());
+                    (name, caption)
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let current = enum_ref.variant_name().to_string();
 
@@ -68,7 +80,7 @@ pub fn build_enum(
     // Variant selector: one button per variant, current one highlighted.
     let buttons: Vec<Box<dyn Scene>> = variant_names
         .iter()
-        .map(|name| {
+        .map(|(name, caption)| {
             let is_current = *name == current;
             let button = EnumVariantButton {
                 root: Some(cx.root.clone()),
@@ -77,7 +89,7 @@ pub fn build_enum(
                 enum_type_id,
             };
             let caption: Box<dyn SceneList> =
-                Box::new(vec![Box::new(label(name.clone())) as Box<dyn Scene>]);
+                Box::new(vec![Box::new(label(caption.clone())) as Box<dyn Scene>]);
             let variant = if is_current {
                 ButtonVariant::Primary
             } else {

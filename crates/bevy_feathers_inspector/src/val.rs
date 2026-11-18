@@ -3,8 +3,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_feathers::controls::{
-    list_rows_from_strings, FeathersNumberInput, FeathersSelect, NumberInputPrecision,
-    OptionIndex,
+    list_rows_from_strings, FeathersNumberInput, FeathersSelect, NumberInputPrecision, OptionIndex,
 };
 use bevy_reflect::{CreateTypeData, PartialReflect};
 use bevy_scene::prelude::*;

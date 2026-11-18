@@ -8,12 +8,12 @@
 //! overwritten.
 
 use bevy_color::Color;
-use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::change_detection::Tick;
+use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
+use bevy_feathers::controls::ButtonVariant;
 use bevy_input_focus::InputFocus;
 use bevy_math::Quat;
-use bevy_feathers::controls::ButtonVariant;
 use bevy_reflect::{ParsedPath, PartialReflect, ReflectRef};
 use bevy_text::EditableText;
 use bevy_ui::Checked;
@@ -188,7 +188,9 @@ fn sync_color_pickers(world: &mut World, pass: &Pass) {
         if let Some(Some(color)) = source
             && picker.differs_from(color)
         {
-            world.entity_mut(entity).insert(ColorPicker::from_color(color));
+            world
+                .entity_mut(entity)
+                .insert(ColorPicker::from_color(color));
         }
     }
 }

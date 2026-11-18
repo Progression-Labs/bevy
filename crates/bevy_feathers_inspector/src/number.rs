@@ -53,13 +53,62 @@ macro_rules! number_field {
     };
 }
 
-number_field!(f32, f32, F32, HardLimit::f32(f32::MIN..=f32::MAX), 3, |v: f32| v);
-number_field!(f64, f64, F64, HardLimit::f64(f64::MIN..=f64::MAX), 3, |v: f64| v);
-number_field!(i32, i32, I32, HardLimit::i32(i32::MIN..=i32::MAX), 0, |v: i32| v);
-number_field!(i64, i64, I64, HardLimit::i64(i64::MIN..=i64::MAX), 0, |v: i64| v);
-number_field!(u32, i64, I64, HardLimit::i64(0..=u32::MAX as i64), 0, |v: i64| v.max(0) as u32);
-number_field!(u64, i64, I64, HardLimit::i64(0..=i64::MAX), 0, |v: i64| v.max(0) as u64);
-number_field!(usize, i64, I64, HardLimit::i64(0..=i64::MAX), 0, |v: i64| v.max(0) as usize);
+number_field!(
+    f32,
+    f32,
+    F32,
+    HardLimit::f32(f32::MIN..=f32::MAX),
+    3,
+    |v: f32| v
+);
+number_field!(
+    f64,
+    f64,
+    F64,
+    HardLimit::f64(f64::MIN..=f64::MAX),
+    3,
+    |v: f64| v
+);
+number_field!(
+    i32,
+    i32,
+    I32,
+    HardLimit::i32(i32::MIN..=i32::MAX),
+    0,
+    |v: i32| v
+);
+number_field!(
+    i64,
+    i64,
+    I64,
+    HardLimit::i64(i64::MIN..=i64::MAX),
+    0,
+    |v: i64| v
+);
+number_field!(
+    u32,
+    i64,
+    I64,
+    HardLimit::i64(0..=u32::MAX as i64),
+    0,
+    |v: i64| v.max(0) as u32
+);
+number_field!(
+    u64,
+    i64,
+    I64,
+    HardLimit::i64(0..=i64::MAX),
+    0,
+    |v: i64| v.max(0) as u64
+);
+number_field!(
+    usize,
+    i64,
+    I64,
+    HardLimit::i64(0..=i64::MAX),
+    0,
+    |v: i64| v.max(0) as usize
+);
 
 /// The field's value in the number input's form, or `None` if it is not `T`.
 fn numeric_of<T: NumberField>(value: &dyn PartialReflect) -> Option<NumericValue> {

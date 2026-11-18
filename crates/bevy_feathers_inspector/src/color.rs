@@ -239,7 +239,12 @@ fn writeback_color(
     mut commands: Commands,
 ) {
     if let Ok(binding) = bindings.get(change.source) {
-        queue_edit(&mut commands, binding, Box::new(change.value), change.is_final);
+        queue_edit(
+            &mut commands,
+            binding,
+            Box::new(change.value),
+            change.is_final,
+        );
     }
 }
 
@@ -301,7 +306,9 @@ fn commit_hex(
         return;
     };
     match Srgba::hex(editable.value().to_string()) {
-        Ok(parsed) => edit_picker(input, true, parents, pickers, commands, |rgba| *rgba = parsed),
+        Ok(parsed) => edit_picker(input, true, parents, pickers, commands, |rgba| {
+            *rgba = parsed
+        }),
         Err(_) => {
             if let Some(root) = picker_root(input, parents, pickers)
                 && let Ok(mut picker) = pickers.get_mut(root)
@@ -367,7 +374,9 @@ pub(crate) fn refresh_color_pickers(
                     commands.entity(entity).try_insert(ColorSwatchValue(color));
                 }
                 ColorPart::Plane => {
-                    commands.entity(entity).try_insert(ColorPlaneValue(plane_value(rgba)));
+                    commands
+                        .entity(entity)
+                        .try_insert(ColorPlaneValue(plane_value(rgba)));
                 }
                 ColorPart::Channel(channel) => {
                     let value = [rgba.red, rgba.green, rgba.blue, rgba.alpha][channel];

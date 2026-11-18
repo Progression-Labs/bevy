@@ -5,14 +5,14 @@ use core::any::TypeId;
 
 use bevy_app::App;
 use bevy_asset::AssetApp;
+use bevy_color::Color;
 use bevy_ecs::prelude::*;
+use bevy_feathers::controls::ColorPlaneValue;
 use bevy_feathers::FeathersPlugins;
 use bevy_feathers_inspector::{
-    apply_edit, build_body, number::EulerAxis, recurse::parse_path,
-    FeathersInspectorPlugins, InspectorBinding, InspectorEdits, InspectorRoot,
+    apply_edit, build_body, number::EulerAxis, recurse::parse_path, FeathersInspectorPlugins,
+    InspectorBinding, InspectorEdits, InspectorRoot,
 };
-use bevy_color::Color;
-use bevy_feathers::controls::ColorPlaneValue;
 use bevy_math::{EulerRot, Quat, Vec2, Vec3};
 use bevy_reflect::{prelude::ReflectDefault, ParsedPath, PartialReflect, Reflect};
 use bevy_ui_widgets::{NumericValue, ValueChange};
@@ -259,7 +259,11 @@ fn fields_go_with_a_panel_despawned_right_after_building() {
     app.world_mut().entity_mut(panel).despawn();
     app.update();
     let mut bound = app.world_mut().query::<&InspectorBinding>();
-    assert_eq!(bound.iter(app.world()).count(), 0, "no field outlived its panel");
+    assert_eq!(
+        bound.iter(app.world()).count(),
+        0,
+        "no field outlived its panel"
+    );
 }
 
 /// A field changed by something other than the inspector (game code, an undo) shows up in its

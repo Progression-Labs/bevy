@@ -3,8 +3,8 @@
 
 use bevy_ecs::prelude::*;
 use bevy_feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
-use bevy_input::{keyboard::KeyboardInput, ButtonState};
 use bevy_input::keyboard::KeyCode;
+use bevy_input::{keyboard::KeyboardInput, ButtonState};
 use bevy_input_focus::{FocusLost, FocusedInput, InputFocus};
 use bevy_reflect::{CreateTypeData, PartialReflect};
 use bevy_scene::prelude::*;

@@ -49,12 +49,19 @@ pub struct Step(pub f32);
 #[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Group(pub &'static str);
 
-/// What a type's card is titled with, in place of the type's name: on the type.
+/// What a type's card is titled with, in place of the type's name: on the type. On an enum's
+/// variant, what its button in the selector reads in place of the variant's name.
 ///
 /// ```ignore
 /// #[derive(Component, Reflect)]
 /// #[reflect(@Title("Camera lens"))]
 /// struct Lens { .. }
+///
+/// #[derive(Reflect)]
+/// enum Model {
+///     #[reflect(@Title("E latest"))]
+///     E,
+/// }
 /// ```
 #[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Title(pub &'static str);

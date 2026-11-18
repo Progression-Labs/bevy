@@ -66,7 +66,13 @@ pub fn build_list(cx: &BuildCx, path: &str, list: &dyn List) -> Box<dyn Scene> {
             let widget = build_value(cx, &child_path, child, &FieldCtx::default());
             let mut children: Vec<Box<dyn Scene>> = vec![Box::new(label(i.to_string())), widget];
             if i > 0 {
-                children.push(op_button(cx, path, ListOp::SwapNext(i - 1), item_type_id, "^"));
+                children.push(op_button(
+                    cx,
+                    path,
+                    ListOp::SwapNext(i - 1),
+                    item_type_id,
+                    "^",
+                ));
             }
             if i + 1 < list.len() {
                 children.push(op_button(cx, path, ListOp::SwapNext(i), item_type_id, "v"));
