@@ -305,14 +305,15 @@ pub fn build_custom_inspector(
 
     let mut section = None;
     read(world, &mut |reflected: &dyn Reflect| {
+        let name: &str = match reflected.get_represented_type_info() {
+            Some(info) => crate::attributes::title_of(info),
+            None => reflected.reflect_short_type_path(),
+        };
         section = Some(section_for(
             world,
             &registry,
             InspectorRoot::Custom { read, write },
-            reflected.get_represented_type_info().map_or(
-                reflected.reflect_short_type_path(),
-                crate::attributes::title_of,
-            ),
+            name,
             reflected,
         ));
     });
