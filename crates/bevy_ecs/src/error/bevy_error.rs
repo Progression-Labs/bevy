@@ -723,10 +723,24 @@ mod tests {
             Ok(())
         }
 
-        let capture_backtrace = std::env::var_os("RUST_BACKTRACE");
-
-        if capture_backtrace.is_none() || capture_backtrace.clone().is_some_and(|s| s == "0") {
-            panic!("This test only works if rust backtraces are enabled. Value set was {capture_backtrace:?}. Please set RUST_BACKTRACE to any value other than 0 and run again.")
+        // Backtraces are captured only under RUST_BACKTRACE, which std reads once a process. The
+        // test does not ask whoever runs it to set it: it runs itself again in a process of its
+        // own with it set (it failed in every run that did not, `cargo test` included).
+        const CHILD: &str = "BEVY_FILTERED_BACKTRACE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "error::bevy_error::tests::filtered_backtrace_test",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .env("RUST_BACKTRACE", "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "the test under RUST_BACKTRACE=1 failed");
+            return;
         }
 
         let error = i_fail().err().unwrap();
@@ -771,7 +785,9 @@ mod tests {
             }
 
             let line = lines.next().unwrap();
-            assert_eq!(&line[6..], expected);
+            // Newer toolchains name `Infallible` in a residual by what it is, `!`.
+            let symbol = line[6..].replace("Result<!, ", "Result<core::convert::Infallible, ");
+            assert_eq!(symbol, expected);
         }
         // To handle any potential "at" line after the expected lines
         let mut skip = false;
