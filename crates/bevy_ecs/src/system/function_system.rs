@@ -35,6 +35,9 @@ pub struct SystemMeta {
     // SystemParams from overriding each other
     flags: SystemStateFlags,
     pub(crate) last_run: Tick,
+    /// Whether the system has run since it was initialized: one that never ran has missed no
+    /// change, so its age is not warned about (see [`check_system_change_tick`]).
+    pub(crate) has_run: bool,
     #[cfg(feature = "trace")]
     pub(crate) system_span: Span,
     #[cfg(feature = "trace")]
@@ -54,6 +57,7 @@ impl SystemMeta {
             name,
             flags: SystemStateFlags::empty(),
             last_run: Tick::new(0),
+            has_run: false,
         }
     }
 
@@ -852,6 +856,7 @@ where
         } else {
             self.system_meta.last_run = change_tick;
         }
+        self.system_meta.has_run = true;
         IntoResult::into_result(out)
     }
 
@@ -891,6 +896,7 @@ where
             world_id: world.id(),
         });
         self.system_meta.last_run = world.change_tick().relative_to(Tick::MAX);
+        self.system_meta.has_run = false;
         let access =
             init_param_or_panic::<F::Param>(&state.param, &mut self.system_meta, world.into());
         self.is_exclusive = access.is_exclusive();
@@ -901,6 +907,7 @@ where
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
         check_system_change_tick(
             &mut self.system_meta.last_run,
+            self.system_meta.has_run,
             check,
             self.system_meta.name.clone(),
         );
@@ -917,6 +924,7 @@ where
 
     fn set_last_run(&mut self, last_run: Tick) {
         self.system_meta.last_run = last_run;
+        self.system_meta.has_run = true;
     }
 }
 
@@ -1104,6 +1112,60 @@ all_tuples!(impl_system_function, 0, 16, F);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Past the first `CHECK_TICK_THRESHOLD` ticks, a system (or run condition) that never ran
+    /// was warned about as "has not run for 3258167296 ticks" (`Tick::MAX`, the clamp, whatever
+    /// its real age); one that ran long enough ago still is.
+    #[test]
+    fn only_a_system_that_ran_is_warned_about_its_age() {
+        use crate::change_detection::{CheckChangeTicks, CHECK_TICK_THRESHOLD};
+        use crate::system::check_system_change_tick;
+
+        let mut world = World::default();
+        let mut never = IntoSystem::into_system(|| {});
+        let mut ran = IntoSystem::into_system(|| {});
+        never.initialize(&mut world);
+        ran.initialize(&mut world);
+        ran.run((), &mut world).unwrap();
+        assert!(!never.system_meta.has_run);
+        assert!(ran.system_meta.has_run);
+
+        let name = || DebugName::borrowed("s");
+        // The first check: the one that never ran is past the limit (it starts at it), silently.
+        *world.change_tick.get_mut() += CHECK_TICK_THRESHOLD;
+        let check = CheckChangeTicks(world.change_tick());
+        let never_run = &mut never.system_meta;
+        assert!(!check_system_change_tick(
+            &mut never_run.last_run,
+            never_run.has_run,
+            check,
+            name(),
+        ));
+        assert_eq!(
+            check.present_tick().relative_to(never_run.last_run),
+            Tick::MAX
+        );
+        let ran_once = &mut ran.system_meta;
+        assert!(!check_system_change_tick(
+            &mut ran_once.last_run,
+            ran_once.has_run,
+            check,
+            name(),
+        ));
+        // Later, the one that ran is past it too, and that is said.
+        *world.change_tick.get_mut() += Tick::MAX.get();
+        let check = CheckChangeTicks(world.change_tick());
+        assert!(check_system_change_tick(
+            &mut ran_once.last_run,
+            ran_once.has_run,
+            check,
+            name(),
+        ));
+        assert_eq!(
+            check.present_tick().relative_to(ran_once.last_run),
+            Tick::MAX
+        );
+    }
 
     #[test]
     fn into_system_type_id_consistency() {

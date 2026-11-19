@@ -205,19 +205,28 @@ pub type BoxedSystem<In = (), Out = ()> = Box<dyn System<In = In, Out = Out>>;
 /// A convenience type alias for a boxed [`ReadOnlySystem`] trait object.
 pub type BoxedReadOnlySystem<In = (), Out = ()> = Box<dyn ReadOnlySystem<In = In, Out = Out>>;
 
+/// Clamps a system's `last_run` older than [`Tick::MAX`], and warns that it has not run for that
+/// long, returning whether it warned. A system that has never run (`has_run` false) is clamped
+/// without a word: it was initialized `Tick::MAX` old, so it would be "older than the limit" at
+/// the first check after any tick at all, and it has missed no change (its first run sees
+/// everything younger than the limit as changed either way). Every app that ran past the first
+/// [`CHECK_TICK_THRESHOLD`](crate::change_detection::CHECK_TICK_THRESHOLD) ticks printed one
+/// warning per never-run system and run condition, each with the same age: `Tick::MAX` itself.
 pub(crate) fn check_system_change_tick(
     last_run: &mut Tick,
+    has_run: bool,
     check: CheckChangeTicks,
     system_name: DebugName,
-) {
-    if last_run.check_tick(check) {
-        let age = check.present_tick().relative_to(*last_run).get();
+) -> bool {
+    let warns = last_run.check_tick(check) && has_run;
+    if warns {
         warn!(
-            "System '{system_name}' has not run for {age} ticks. \
-            Changes older than {} ticks will not be detected.",
-            Tick::MAX.get() - 1,
+            "System '{system_name}' has not run for more than {} ticks. \
+            Changes older than that will not be detected.",
+            Tick::MAX.get(),
         );
     }
+    warns
 }
 
 impl<In, Out> Debug for dyn System<In = In, Out = Out>
