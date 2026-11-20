@@ -29,7 +29,7 @@ use bevy_ecs::{
     world::World,
 };
 pub use bevy_ecs_macros::SettingsGroup;
-use bevy_log::warn;
+use bevy_log::{debug, warn};
 use bevy_reflect::{
     enums::DynamicEnum,
     prelude::ReflectDefault,
@@ -553,11 +553,12 @@ fn load_settings_file(
     // Load the TOML file
     let store = SettingsStore::new(app_name);
     let toml = store.load(filename);
+    let file = store.location(filename);
     if toml.is_none() {
-        warn!("Filename {filename}.toml not found");
+        // A fresh install has none yet: every setting starts at its default.
+        debug!("{file} not found: its settings start at their defaults");
     }
 
-    let file = store.location(filename);
     for Unread { field, why } in apply_settings_to_world(world, toml.as_ref(), manifest, types) {
         warn!(
             "{file}: `{field}` could not be read ({why}); it keeps the value it had, and the next \
@@ -570,10 +571,11 @@ fn load_settings_file(
 /// the value it had. Loading reports each one, since the next save writes over what was there.
 #[derive(Debug, PartialEq)]
 struct Unread {
-    /// Where the value is in the file: `group.field`, `group.key.field`, or `group.0` for a
-    /// tuple struct's field.
+    /// Where the value is in the file: `group`, `group.field`, `group.key.field`, or `group.0`
+    /// for a tuple struct's field.
     field: String,
-    /// Why it could not be read: the deserializer's error, or a type the registry lacks.
+    /// Why it could not be read: the deserializer's error, a type the registry lacks, a shape
+    /// that is not the setting's (a value where a table goes), or a name no setting has.
     why: String,
 }
 
@@ -584,14 +586,17 @@ struct Unread {
 /// - Updates an existing resource with values from the TOML, or
 /// - Creates a new resource with default values merged with TOML values
 ///
-/// Returns the values in the TOML that could not be applied (each field kept what it had).
+/// Returns the values in the TOML that could not be applied (each field kept what it had),
+/// including those whose name no setting of this file has.
 fn apply_settings_to_world(
     world: &mut World,
     toml: Option<&toml::Table>,
     manifest: &SettingsFileManifest,
     types: &TypeRegistry,
 ) -> Vec<Unread> {
-    let mut unread = Vec::new();
+    let mut unread = toml
+        .map(|toml| unclaimed(toml, manifest, types))
+        .unwrap_or_default();
     for tid in manifest.resource_types.iter() {
         let ty = types.get(*tid).unwrap();
         let Some(reflect_settings_group) = ty.data::<ReflectSettingsGroup>() else {
@@ -614,10 +619,10 @@ fn apply_settings_to_world(
 
             if let Some(toml) = toml
                 && let Some(value) = toml.get(settings_group)
+                && let Some((value, path)) = section(value, settings_group, settings_key)
             {
-                let (value, path) = section(value, settings_group, settings_key);
-
-                load_properties(value, &mut *reflect, types, &path, &mut unread);
+                let whole = settings_key.is_some();
+                load_properties(value, &mut *reflect, types, &path, whole, &mut unread);
             }
         } else {
             // The resource does not exist, so create a default.
@@ -627,33 +632,105 @@ fn apply_settings_to_world(
 
             if let Some(toml) = toml
                 && let Some(value) = toml.get(settings_group)
+                && let Some((value, path)) = section(value, settings_group, settings_key)
             {
-                let (value, path) = section(value, settings_group, settings_key);
-
-                load_properties(value, &mut *default_value, types, &path, &mut unread);
+                let whole = settings_key.is_some();
+                load_properties(value, &mut *default_value, types, &path, whole, &mut unread);
             }
 
             // Now add the new resource to the world.
             reflect_component.insert(&mut res_entity, default_value.as_partial_reflect(), types);
         }
     }
+    // Resources sharing a section each see a section of the wrong shape: say it once.
+    let mut said = Vec::new();
+    unread.retain(|u| {
+        let new = !said.contains(&(u.field.clone(), u.why.clone()));
+        said.push((u.field.clone(), u.why.clone()));
+        new
+    });
     unread
 }
 
 /// The properties to apply to a resource out of its group's section, and where they are in the
-/// file (`group` or `group.key`).
+/// file (`group` or `group.key`); none when the resource has a key the section does not hold
+/// (nothing was saved for it, and it keeps what it has).
 fn section<'a>(
     value: &'a toml::Value,
     group: &str,
     key: Option<&str>,
-) -> (&'a toml::Value, String) {
-    match key.and_then(|key| Some((key, value.get(key)?))) {
+) -> Option<(&'a toml::Value, String)> {
+    match key {
         // If there is a settings key, then we need to look one level deeper in the TOML to find
         // the actual properties to apply to the resource.
-        Some((key, keyed)) => (keyed, format!("{group}.{key}")),
+        Some(key) => Some((value.get(key)?, format!("{group}.{key}"))),
         // No settings key, so we can apply the whole section to the resource.
-        None => (value, group.to_string()),
+        None => Some((value, group.to_string())),
     }
+}
+
+/// The values in `toml` no setting of the file reads: a group no resource has, a name in a
+/// group's section that is neither a field of its structs nor a resource's key, or a section
+/// that is not a table where only keyed resources read it. A group that a resource reads whole
+/// (a tuple struct or an enum without a key) is that resource's to judge.
+fn unclaimed(
+    toml: &toml::Table,
+    manifest: &SettingsFileManifest,
+    types: &TypeRegistry,
+) -> Vec<Unread> {
+    // Per group: the names its section may hold (none: read whole), and whether a struct reads
+    // its fields there (and so reports a section that is not a table itself).
+    let mut claims: HashMap<&str, (Option<Vec<&str>>, bool)> = HashMap::new();
+    for tid in &manifest.resource_types {
+        let Some(group) = types
+            .get(*tid)
+            .and_then(|ty| ty.data::<ReflectSettingsGroup>())
+        else {
+            continue;
+        };
+        let info = types.get(*tid).map(TypeRegistration::type_info);
+        let (names, fields) = claims
+            .entry(group.settings_group_name)
+            .or_insert((Some(Vec::new()), false));
+        match (group.settings_key_name, info) {
+            (Some(key), _) => names.iter_mut().for_each(|n| n.push(key)),
+            (None, Some(TypeInfo::Struct(st))) => {
+                names
+                    .iter_mut()
+                    .for_each(|n| n.extend(st.field_names().iter().copied()));
+                *fields = true;
+            }
+            (None, _) => *names = None,
+        }
+    }
+    let mut unread = Vec::new();
+    for (group, value) in toml {
+        let Some((names, fields)) = claims.get(group.as_str()) else {
+            unread.push(Unread {
+                field: group.clone(),
+                why: "no settings group of this file has this name".into(),
+            });
+            continue;
+        };
+        let Some(names) = names else { continue };
+        match value.as_table() {
+            Some(table) => unread.extend(
+                table
+                    .keys()
+                    .filter(|k| !names.contains(&k.as_str()))
+                    .map(|k| Unread {
+                        field: format!("{group}.{k}"),
+                        why: "no setting has this name".into(),
+                    }),
+            ),
+            None if !fields => unread.push(Unread {
+                field: group.clone(),
+                why: format!("expected a table, found {}", value.type_str()),
+            }),
+            None => {}
+        }
+    }
+    unread
 }
 
 fn is_option_type(type_info: &TypeInfo) -> bool {
@@ -662,12 +739,15 @@ fn is_option_type(type_info: &TypeInfo) -> bool {
 }
 
 /// Applies `value`, the TOML at `path`, to `resource`, field by field. A field whose value cannot
-/// be deserialized keeps what it had and goes in `unread`.
+/// be deserialized keeps what it had and goes in `unread`, and so does a value of the wrong
+/// shape. When the table is the resource's `whole` (a keyed resource's own), a name in it that
+/// is none of its fields goes there too; a shared section's names are checked by [`unclaimed`].
 fn load_properties(
     value: &toml::Value,
     resource: &mut dyn PartialReflect,
     types: &TypeRegistry,
     path: &str,
+    whole: bool,
     unread: &mut Vec<Unread>,
 ) {
     // The deserialized value, or what is wrong with it.
@@ -688,10 +768,20 @@ fn load_properties(
 
     match tinfo {
         TypeInfo::Struct(stinfo) => {
-            if let Some(table) = value.as_table()
-                && let ReflectMut::Struct(st_reflect) = resource.reflect_mut()
-            {
-                // Deserialize matching field names, ignore ones that don't match.
+            let Some(table) = value.as_table() else {
+                miss(
+                    path.to_string(),
+                    format!("expected a table, found {}", value.type_str()),
+                );
+                return;
+            };
+            if whole {
+                for name in table.keys().filter(|k| stinfo.field(k).is_none()) {
+                    miss(format!("{path}.{name}"), "no setting has this name".into());
+                }
+            }
+            if let ReflectMut::Struct(st_reflect) = resource.reflect_mut() {
+                // Deserialize matching field names; the others are reported above.
                 for (idx, name) in stinfo.field_names().iter().enumerate() {
                     if let Some(toml_field_value) = table.get(*name)
                         && let Some(field_info) = stinfo.field_at(idx)
@@ -720,19 +810,29 @@ fn load_properties(
         TypeInfo::TupleStruct(tstinfo) => {
             if let ReflectMut::TupleStruct(tst_reflect) = resource.reflect_mut() {
                 // tuple structs with length > 1 are always serialized as arrays
-                if tst_reflect.field_len() > 1
-                    && let Some(array) = value.as_array()
-                {
+                if tst_reflect.field_len() > 1 {
+                    let Some(array) = value.as_array() else {
+                        miss(
+                            path.to_string(),
+                            format!("expected an array, found {}", value.type_str()),
+                        );
+                        return;
+                    };
                     for (idx, toml_field_value) in array.iter().enumerate() {
-                        if let Some(field_info) = tstinfo.field_at(idx) {
-                            let field_type = types.get(field_info.type_id());
-                            match read(field_type, field_info.type_path(), toml_field_value) {
-                                // Should be safe to unwrap here since we know the field exists (above).
-                                Ok(field_value) => {
-                                    tst_reflect.field_mut(idx).unwrap().apply(&*field_value);
-                                }
-                                Err(why) => miss(format!("{path}.{idx}"), why),
+                        let Some(field_info) = tstinfo.field_at(idx) else {
+                            miss(
+                                format!("{path}.{idx}"),
+                                format!("there are {} fields", tst_reflect.field_len()),
+                            );
+                            continue;
+                        };
+                        let field_type = types.get(field_info.type_id());
+                        match read(field_type, field_info.type_path(), toml_field_value) {
+                            // Should be safe to unwrap here since we know the field exists (above).
+                            Ok(field_value) => {
+                                tst_reflect.field_mut(idx).unwrap().apply(&*field_value);
                             }
+                            Err(why) => miss(format!("{path}.{idx}"), why),
                         }
                     }
                 } else if tst_reflect.field_len() == 1
@@ -755,7 +855,15 @@ fn load_properties(
                 }
             }
         }
-        _ => {}
+        // A list, map, set, array, tuple or opaque value is read whole, as the resource's type.
+        _ => match read(types.get(tinfo.type_id()), tinfo.type_path(), value) {
+            Ok(whole_value) => {
+                if let Err(e) = resource.try_apply(&*whole_value) {
+                    miss(path.to_string(), e.to_string());
+                }
+            }
+            Err(why) => miss(path.to_string(), why),
+        },
     }
 }
 
@@ -810,6 +918,12 @@ mod tests {
     struct AudioSettings {
         volume: f32,
     }
+
+    /// A tuple struct of two fields: saved as an array under its key, `pair_settings`.
+    #[derive(Resource, SettingsGroup, Reflect, Default, Debug, PartialEq)]
+    #[reflect(Resource, SettingsGroup, Default)]
+    #[settings_group(group = "pair")]
+    struct PairSettings(u32, u32);
 
     #[derive(Resource, SettingsGroup, Reflect, Default)]
     #[reflect(Resource, SettingsGroup, Default)]
@@ -1281,6 +1395,80 @@ mod tests {
         assert_eq!(
             *world.resource::<CounterRefreshRateSettings>(),
             CounterRefreshRateSettings::Fast
+        );
+    }
+
+    /// The three counter resources share `counter_settings`; the enum's is under its key.
+    fn counter_manifest(types: &mut TypeRegistry) -> SettingsFileManifest {
+        types.register::<CounterSettings>();
+        types.register::<ExtraCounterSettings>();
+        types.register::<CounterRefreshRateSettings>();
+        types.register::<PairSettings>();
+        SettingsFileManifest {
+            last_save: Tick::new(0),
+            resource_types: vec![
+                TypeId::of::<CounterSettings>(),
+                TypeId::of::<ExtraCounterSettings>(),
+                TypeId::of::<CounterRefreshRateSettings>(),
+                TypeId::of::<PairSettings>(),
+            ],
+        }
+    }
+
+    /// A shared section that lacks one keyed resource's key is nothing to report: nothing was
+    /// saved for it, and it keeps what it has (it is not read from its siblings' fields).
+    #[test]
+    fn test_missing_key_in_shared_group_is_not_reported() {
+        let mut world = World::new();
+        let mut types = TypeRegistry::default();
+        let manifest = counter_manifest(&mut types);
+        world.insert_resource(CounterRefreshRateSettings::Fast);
+        let table: toml::Table =
+            toml::from_str("[counter_settings]\ncount = 7\nenabled = true").unwrap();
+
+        let unread = apply_settings_to_world(&mut world, Some(&table), &manifest, &types);
+
+        assert_eq!(unread, [], "{unread:?}");
+        assert_eq!(world.resource::<CounterSettings>().count, 7);
+        assert_eq!(
+            *world.resource::<CounterRefreshRateSettings>(),
+            CounterRefreshRateSettings::Fast
+        );
+    }
+
+    /// A name no setting has (a renamed or removed field, a gone group) is reported, and so is
+    /// a value of the wrong shape: a section that is no table, a pair that is no array.
+    #[test]
+    fn test_unknown_names_and_wrong_shapes_are_reported() {
+        let mut types = TypeRegistry::default();
+        let manifest = counter_manifest(&mut types);
+        let unread_of = |toml: &str| {
+            let mut world = World::new();
+            let table: toml::Table = toml::from_str(toml).unwrap();
+            apply_settings_to_world(&mut world, Some(&table), &manifest, &types)
+                .into_iter()
+                .map(|u| u.field)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            unread_of("[counter_settings]\ncount = 7\ncounts = 8\n[gone]\nx = 1"),
+            ["counter_settings.counts", "gone"]
+        );
+        assert_eq!(unread_of("counter_settings = 5"), ["counter_settings"]);
+        // A tuple struct is saved under its key, `pair.pair_settings`.
+        assert_eq!(unread_of("pair = 5"), ["pair"]);
+        assert_eq!(
+            unread_of("[pair]\npair_settings = 5"),
+            ["pair.pair_settings"]
+        );
+        assert_eq!(
+            unread_of("[pair]\npair_settings = [1, 2, 3]"),
+            ["pair.pair_settings.2"]
+        );
+        assert_eq!(
+            unread_of("[pair]\npair_settings = [1, 2]"),
+            Vec::<String>::new()
         );
     }
 
