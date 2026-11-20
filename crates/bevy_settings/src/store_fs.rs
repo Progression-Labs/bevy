@@ -89,6 +89,17 @@ impl SettingsStore {
         }
     }
 
+    /// Where the settings file called `filename` is, for messages about it.
+    pub(crate) fn location(&self, filename: &str) -> String {
+        match &self.base_path {
+            Some(base_path) => base_path
+                .join(format!("{filename}.toml"))
+                .display()
+                .to_string(),
+            None => format!("{filename}.toml"),
+        }
+    }
+
     /// Deserialize a [`toml::Table`] from disk. If the file does not exist, `None` will
     /// be returned.
     ///

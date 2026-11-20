@@ -557,7 +557,24 @@ fn load_settings_file(
         warn!("Filename {filename}.toml not found");
     }
 
-    apply_settings_to_world(world, toml.as_ref(), manifest, types);
+    let file = store.location(filename);
+    for Unread { field, why } in apply_settings_to_world(world, toml.as_ref(), manifest, types) {
+        warn!(
+            "{file}: `{field}` could not be read ({why}); it keeps the value it had, and the next \
+             save writes that value over it"
+        );
+    }
+}
+
+/// A value the settings file has for a field that could not be applied to it: the field kept
+/// the value it had. Loading reports each one, since the next save writes over what was there.
+#[derive(Debug, PartialEq)]
+struct Unread {
+    /// Where the value is in the file: `group.field`, `group.key.field`, or `group.0` for a
+    /// tuple struct's field.
+    field: String,
+    /// Why it could not be read: the deserializer's error, or a type the registry lacks.
+    why: String,
 }
 
 /// Applies settings from a TOML table to the world's resources.
@@ -566,12 +583,15 @@ fn load_settings_file(
 /// For each resource type in the manifest, this function either:
 /// - Updates an existing resource with values from the TOML, or
 /// - Creates a new resource with default values merged with TOML values
+///
+/// Returns the values in the TOML that could not be applied (each field kept what it had).
 fn apply_settings_to_world(
     world: &mut World,
     toml: Option<&toml::Table>,
     manifest: &SettingsFileManifest,
     types: &TypeRegistry,
-) {
+) -> Vec<Unread> {
+    let mut unread = Vec::new();
     for tid in manifest.resource_types.iter() {
         let ty = types.get(*tid).unwrap();
         let Some(reflect_settings_group) = ty.data::<ReflectSettingsGroup>() else {
@@ -595,16 +615,9 @@ fn apply_settings_to_world(
             if let Some(toml) = toml
                 && let Some(value) = toml.get(settings_group)
             {
-                let value = if let Some(settings_key) = settings_key {
-                    // If there is a settings key, then we need to look one level deeper in the TOML
-                    // to find the actual properties to apply to the resource.
-                    value.get(settings_key).unwrap_or(value)
-                } else {
-                    // No settings key, so we can apply the whole section to the resource
-                    value
-                };
+                let (value, path) = section(value, settings_group, settings_key);
 
-                load_properties(value, &mut *reflect, types);
+                load_properties(value, &mut *reflect, types, &path, &mut unread);
             }
         } else {
             // The resource does not exist, so create a default.
@@ -615,21 +628,31 @@ fn apply_settings_to_world(
             if let Some(toml) = toml
                 && let Some(value) = toml.get(settings_group)
             {
-                let value = if let Some(settings_key) = settings_key {
-                    // If there is a settings key, then we need to look one level deeper in the TOML
-                    // to find the actual properties to apply to the resource.
-                    value.get(settings_key).unwrap_or(value)
-                } else {
-                    // No settings key, so we can apply the whole section to the resource
-                    value
-                };
+                let (value, path) = section(value, settings_group, settings_key);
 
-                load_properties(value, &mut *default_value, types);
+                load_properties(value, &mut *default_value, types, &path, &mut unread);
             }
 
             // Now add the new resource to the world.
             reflect_component.insert(&mut res_entity, default_value.as_partial_reflect(), types);
         }
+    }
+    unread
+}
+
+/// The properties to apply to a resource out of its group's section, and where they are in the
+/// file (`group` or `group.key`).
+fn section<'a>(
+    value: &'a toml::Value,
+    group: &str,
+    key: Option<&str>,
+) -> (&'a toml::Value, String) {
+    match key.and_then(|key| Some((key, value.get(key)?))) {
+        // If there is a settings key, then we need to look one level deeper in the TOML to find
+        // the actual properties to apply to the resource.
+        Some((key, keyed)) => (keyed, format!("{group}.{key}")),
+        // No settings key, so we can apply the whole section to the resource.
+        None => (value, group.to_string()),
     }
 }
 
@@ -638,7 +661,27 @@ fn is_option_type(type_info: &TypeInfo) -> bool {
         && type_info.type_path_table().ident() == Some("Option")
 }
 
-fn load_properties(value: &toml::Value, resource: &mut dyn PartialReflect, types: &TypeRegistry) {
+/// Applies `value`, the TOML at `path`, to `resource`, field by field. A field whose value cannot
+/// be deserialized keeps what it had and goes in `unread`.
+fn load_properties(
+    value: &toml::Value,
+    resource: &mut dyn PartialReflect,
+    types: &TypeRegistry,
+    path: &str,
+    unread: &mut Vec<Unread>,
+) {
+    // The deserialized value, or what is wrong with it.
+    let read = |field_type: Option<&TypeRegistration>,
+                type_path: &str,
+                toml_value: &toml::Value|
+     -> Result<Box<dyn PartialReflect>, String> {
+        let field_type =
+            field_type.ok_or_else(|| format!("its type {type_path} is not registered"))?;
+        TypedReflectDeserializer::new(field_type, types)
+            .deserialize(toml_value.clone())
+            .map_err(|e| e.to_string().trim().to_string())
+    };
+    let mut miss = |field: String, why: String| unread.push(Unread { field, why });
     let Some(tinfo) = resource.get_represented_type_info() else {
         return;
     };
@@ -649,13 +692,14 @@ fn load_properties(value: &toml::Value, resource: &mut dyn PartialReflect, types
                 && let ReflectMut::Struct(st_reflect) = resource.reflect_mut()
             {
                 // Deserialize matching field names, ignore ones that don't match.
-                for (idx, field) in stinfo.field_names().iter().enumerate() {
-                    if let Some(toml_field_value) = table.get(*field)
+                for (idx, name) in stinfo.field_names().iter().enumerate() {
+                    if let Some(toml_field_value) = table.get(*name)
                         && let Some(field_info) = stinfo.field_at(idx)
-                        && let Some(field_type) = types.get(field_info.type_id())
                     {
+                        let field_type = types.get(field_info.type_id());
                         let field = st_reflect.field_at_mut(idx).unwrap();
-                        if is_option_type(field_type.type_info())
+                        if let Some(field_type) = field_type
+                            && is_option_type(field_type.type_info())
                             && toml_field_value
                                 .as_table()
                                 .is_some_and(toml::Table::is_empty)
@@ -664,11 +708,9 @@ fn load_properties(value: &toml::Value, resource: &mut dyn PartialReflect, types
                             none.set_represented_type(Some(field_type.type_info()));
                             field.apply(none.as_partial_reflect());
                         } else {
-                            let deserializer = TypedReflectDeserializer::new(field_type, types);
-                            if let Ok(field_value) =
-                                deserializer.deserialize(toml_field_value.clone())
-                            {
-                                field.apply(&*field_value);
+                            match read(field_type, field_info.type_path(), toml_field_value) {
+                                Ok(field_value) => field.apply(&*field_value),
+                                Err(why) => miss(format!("{path}.{name}"), why),
                             }
                         }
                     }
@@ -682,38 +724,34 @@ fn load_properties(value: &toml::Value, resource: &mut dyn PartialReflect, types
                     && let Some(array) = value.as_array()
                 {
                     for (idx, toml_field_value) in array.iter().enumerate() {
-                        if let Some(field_info) = tstinfo.field_at(idx)
-                            && let Some(field_type) = types.get(field_info.type_id())
-                        {
-                            let deserializer = TypedReflectDeserializer::new(field_type, types);
-                            if let Ok(field_value) =
-                                deserializer.deserialize(toml_field_value.clone())
-                            {
+                        if let Some(field_info) = tstinfo.field_at(idx) {
+                            let field_type = types.get(field_info.type_id());
+                            match read(field_type, field_info.type_path(), toml_field_value) {
                                 // Should be safe to unwrap here since we know the field exists (above).
-                                tst_reflect.field_mut(idx).unwrap().apply(&*field_value);
+                                Ok(field_value) => {
+                                    tst_reflect.field_mut(idx).unwrap().apply(&*field_value);
+                                }
+                                Err(why) => miss(format!("{path}.{idx}"), why),
                             }
                         }
                     }
                 } else if tst_reflect.field_len() == 1
                     && let Some(field_info) = tstinfo.field_at(0)
-                    && let Some(field_type) = types.get(field_info.type_id())
                 {
-                    let deserializer = TypedReflectDeserializer::new(field_type, types);
-                    if let Ok(field_value) = deserializer.deserialize(value.clone()) {
+                    let field_type = types.get(field_info.type_id());
+                    match read(field_type, field_info.type_path(), value) {
                         // Should be safe to unwrap here since we know the field exists (above).
-                        tst_reflect.field_mut(0).unwrap().apply(&*field_value);
+                        Ok(field_value) => tst_reflect.field_mut(0).unwrap().apply(&*field_value),
+                        Err(why) => miss(path.to_string(), why),
                     }
                 }
             }
         }
         TypeInfo::Enum(einfo) => {
-            if let ReflectMut::Enum(en_reflect) = resource.reflect_mut()
-                && let Some(variant_type) = types.get(einfo.type_id())
-            {
-                let deserializer = TypedReflectDeserializer::new(variant_type, types);
-
-                if let Ok(variant_value) = deserializer.deserialize(value.clone()) {
-                    en_reflect.apply(&*variant_value);
+            if let ReflectMut::Enum(en_reflect) = resource.reflect_mut() {
+                match read(types.get(einfo.type_id()), einfo.type_path(), value) {
+                    Ok(variant_value) => en_reflect.apply(&*variant_value),
+                    Err(why) => miss(path.to_string(), why),
                 }
             }
         }
@@ -1195,6 +1233,82 @@ mod tests {
         // Verify refresh_rate was preserved
         let refresh_rate = world.get_resource::<CounterRefreshRateSettings>().unwrap();
         assert_eq!(*refresh_rate, CounterRefreshRateSettings::Fast);
+    }
+
+    /// A value that does not read is reported by where it is, and its field keeps what it had,
+    /// while the fields beside it that do read are applied.
+    #[test]
+    fn test_unreadable_values_are_reported_and_keep_their_field() {
+        let mut world = World::new();
+        let mut types = TypeRegistry::default();
+        types.register::<CounterSettings>();
+        types.register::<ExtraCounterSettings>();
+        types.register::<CounterRefreshRateSettings>();
+
+        world.insert_resource(CounterSettings { count: 50 });
+        world.insert_resource(ExtraCounterSettings { enabled: false });
+        world.insert_resource(CounterRefreshRateSettings::Fast);
+
+        let table: toml::Table = toml::from_str(
+            r#"
+            [counter_settings]
+            count = "lots"
+            enabled = true
+            refresh_rate = "Sometimes"
+            "#,
+        )
+        .unwrap();
+        let manifest = SettingsFileManifest {
+            last_save: Tick::new(0),
+            resource_types: vec![
+                TypeId::of::<CounterSettings>(),
+                TypeId::of::<ExtraCounterSettings>(),
+                TypeId::of::<CounterRefreshRateSettings>(),
+            ],
+        };
+
+        let unread = apply_settings_to_world(&mut world, Some(&table), &manifest, &types);
+
+        let fields: Vec<&str> = unread.iter().map(|u| u.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            ["counter_settings.count", "counter_settings.refresh_rate"],
+            "{unread:?}"
+        );
+        assert!(unread.iter().all(|u| !u.why.is_empty()), "{unread:?}");
+        assert_eq!(world.resource::<CounterSettings>().count, 50);
+        assert!(world.resource::<ExtraCounterSettings>().enabled);
+        assert_eq!(
+            *world.resource::<CounterRefreshRateSettings>(),
+            CounterRefreshRateSettings::Fast
+        );
+    }
+
+    /// A field whose type the registry does not have is reported, not skipped in silence.
+    #[test]
+    fn test_unregistered_field_type_is_reported() {
+        let mut world = World::new();
+        let mut types = TypeRegistry::default();
+        types.register::<CounterSettings>();
+        // `i32` comes with the registry's defaults; take it away.
+        types = {
+            let mut bare = TypeRegistry::empty();
+            bare.add_registration(types.get(TypeId::of::<CounterSettings>()).unwrap().clone());
+            bare
+        };
+        world.insert_resource(CounterSettings { count: 50 });
+        let table: toml::Table = toml::from_str("[counter_settings]\ncount = 7").unwrap();
+        let manifest = SettingsFileManifest {
+            last_save: Tick::new(0),
+            resource_types: vec![TypeId::of::<CounterSettings>()],
+        };
+
+        let unread = apply_settings_to_world(&mut world, Some(&table), &manifest, &types);
+
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(unread[0].field, "counter_settings.count");
+        assert!(unread[0].why.contains("not registered"), "{unread:?}");
+        assert_eq!(world.resource::<CounterSettings>().count, 50);
     }
 
     #[test]

@@ -24,6 +24,11 @@ impl SettingsStore {
         format!("{}-{}", self.app_name, filename)
     }
 
+    /// Where the settings file called `filename` is, for messages about it.
+    pub(crate) fn location(&self, filename: &str) -> String {
+        format!("local storage `{}`", self.storage_key(filename))
+    }
+
     /// Save a [`toml::Table`] to browser storage, synchronously.
     ///
     /// # Arguments
