@@ -92,6 +92,10 @@ pub enum StateTransitionSystems {
 
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 /// System set that runs exit schedule(s) for state `S`.
+///
+/// Gated by `transition_pending::<S>`: its systems run only on a frame where `S` transitioned (a
+/// `StateTransitionEvent<S>` was written, a same-state transition included) and are skipped on
+/// every other frame, so only work tied to a transition of `S` belongs here.
 pub struct ExitSchedules<S: States>(PhantomData<S>);
 
 impl<S: States> Default for ExitSchedules<S> {
@@ -102,6 +106,10 @@ impl<S: States> Default for ExitSchedules<S> {
 
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 /// System set that runs transition schedule(s) for state `S`.
+///
+/// Gated by `transition_pending::<S>`: its systems run only on a frame where `S` transitioned (a
+/// `StateTransitionEvent<S>` was written, a same-state transition included) and are skipped on
+/// every other frame, so only work tied to a transition of `S` belongs here.
 pub struct TransitionSchedules<S: States>(PhantomData<S>);
 
 impl<S: States> Default for TransitionSchedules<S> {
@@ -112,6 +120,10 @@ impl<S: States> Default for TransitionSchedules<S> {
 
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 /// System set that runs enter schedule(s) for state `S`.
+///
+/// Gated by `transition_pending::<S>`: its systems run only on a frame where `S` transitioned (a
+/// `StateTransitionEvent<S>` was written, a same-state transition included) and are skipped on
+/// every other frame, so only work tied to a transition of `S` belongs here.
 pub struct EnterSchedules<S: States>(PhantomData<S>);
 
 impl<S: States> Default for EnterSchedules<S> {

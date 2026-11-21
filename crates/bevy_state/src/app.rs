@@ -254,7 +254,11 @@ fn enable_state_scoped_entities<S: States>(app: &mut SubApp) {
     // `StateTransitionSystems::ExitSchedules` rather than `OnExit`, because
     // `OnExit` only runs for one specific variant of the state. Each goes in its state's own
     // `ExitSchedules::<S>` (and `TransitionSchedules`, `EnterSchedules`) too, whose run condition
-    // skips them on a frame where `S` did not transition.
+    // skips them on a frame where `S` did not transition. That also orders them with the states
+    // around `S`, as its schedules are: on exit, a child (computed or sub) state's scoped
+    // entities go before its parent's `OnExit` runs, and the parent's are still there during the
+    // child's `OnExit`; on enter, a child's go after its parent's `OnEnter`. Within one state
+    // they stay unordered with that state's own `OnExit` / `OnEnter`, as before.
     app.add_systems(
         StateTransition,
         (

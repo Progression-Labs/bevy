@@ -84,6 +84,8 @@ mod custom_transitions {
                     // - [`ExitSchedules`] - Ran from leaf-states to root-states,
                     // - [`TransitionSchedules`] - Ran in arbitrary order,
                     // - [`EnterSchedules`] - Ran from root-states to leaf-states.
+                    // Each state's sets run only on a frame where that state transitioned, so a
+                    // system in one sees the transition's event and nothing else.
                     .in_set(EnterSchedules::<S>::default()),
             )
             .add_systems(
