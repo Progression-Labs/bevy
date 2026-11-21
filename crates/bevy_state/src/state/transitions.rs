@@ -233,6 +233,17 @@ pub fn setup_state_transitions_in_world(world: &mut World) {
     schedules.insert(schedule);
 }
 
+/// Whether a [`StateTransitionEvent<S>`] was written since this condition last ran: the run
+/// condition on each state's [`ExitSchedules`], [`TransitionSchedules`] and [`EnterSchedules`]
+/// sets. Everything in them (the exit, transition and enter schedules' runners, the state-scoped
+/// entities' systems) has work only on a frame where `S` transitioned, so on every other frame
+/// the executor checks this once per set instead of dispatching each of them to do nothing.
+pub(crate) fn transition_pending<S: States>(
+    mut reader: MessageReader<StateTransitionEvent<S>>,
+) -> bool {
+    reader.read().count() > 0
+}
+
 /// Returns the latest state transition event of type `S`, if any are available.
 pub fn last_transition<S: States>(
     mut reader: MessageReader<StateTransitionEvent<S>>,

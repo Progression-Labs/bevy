@@ -18,10 +18,15 @@ pub trait FreelyMutableState: States {
         schedule.configure_sets((
             ApplyStateTransition::<Self>::default()
                 .in_set(StateTransitionSystems::DependentTransitions),
-            ExitSchedules::<Self>::default().in_set(StateTransitionSystems::ExitSchedules),
+            ExitSchedules::<Self>::default()
+                .in_set(StateTransitionSystems::ExitSchedules)
+                .run_if(transition_pending::<Self>),
             TransitionSchedules::<Self>::default()
-                .in_set(StateTransitionSystems::TransitionSchedules),
-            EnterSchedules::<Self>::default().in_set(StateTransitionSystems::EnterSchedules),
+                .in_set(StateTransitionSystems::TransitionSchedules)
+                .run_if(transition_pending::<Self>),
+            EnterSchedules::<Self>::default()
+                .in_set(StateTransitionSystems::EnterSchedules)
+                .run_if(transition_pending::<Self>),
         ));
 
         schedule

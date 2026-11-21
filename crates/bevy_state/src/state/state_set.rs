@@ -9,9 +9,9 @@ use self::sealed::StateSetSealed;
 
 use super::{
     computed_states::ComputedStates, internal_apply_state_transition, last_transition, run_enter,
-    run_exit, run_transition, sub_states::SubStates, take_next_state, ApplyStateTransition,
-    EnterSchedules, ExitSchedules, NextState, PreviousState, State, StateTransitionEvent,
-    StateTransitionSystems, States, TransitionSchedules,
+    run_exit, run_transition, sub_states::SubStates, take_next_state, transition_pending,
+    ApplyStateTransition, EnterSchedules, ExitSchedules, NextState, PreviousState, State,
+    StateTransitionEvent, StateTransitionSystems, States, TransitionSchedules,
 };
 
 mod sealed {
@@ -129,11 +129,15 @@ impl<S: InnerStateSet> StateSet for S {
                 .after(ApplyStateTransition::<S::RawState>::default()),
             ExitSchedules::<T>::default()
                 .in_set(StateTransitionSystems::ExitSchedules)
-                .before(ExitSchedules::<S::RawState>::default()),
-            TransitionSchedules::<T>::default().in_set(StateTransitionSystems::TransitionSchedules),
+                .before(ExitSchedules::<S::RawState>::default())
+                .run_if(transition_pending::<T>),
+            TransitionSchedules::<T>::default()
+                .in_set(StateTransitionSystems::TransitionSchedules)
+                .run_if(transition_pending::<T>),
             EnterSchedules::<T>::default()
                 .in_set(StateTransitionSystems::EnterSchedules)
-                .after(EnterSchedules::<S::RawState>::default()),
+                .after(EnterSchedules::<S::RawState>::default())
+                .run_if(transition_pending::<T>),
         ));
 
         schedule
@@ -228,11 +232,15 @@ impl<S: InnerStateSet> StateSet for S {
                 .after(ApplyStateTransition::<S::RawState>::default()),
             ExitSchedules::<T>::default()
                 .in_set(StateTransitionSystems::ExitSchedules)
-                .before(ExitSchedules::<S::RawState>::default()),
-            TransitionSchedules::<T>::default().in_set(StateTransitionSystems::TransitionSchedules),
+                .before(ExitSchedules::<S::RawState>::default())
+                .run_if(transition_pending::<T>),
+            TransitionSchedules::<T>::default()
+                .in_set(StateTransitionSystems::TransitionSchedules)
+                .run_if(transition_pending::<T>),
             EnterSchedules::<T>::default()
                 .in_set(StateTransitionSystems::EnterSchedules)
-                .after(EnterSchedules::<S::RawState>::default()),
+                .after(EnterSchedules::<S::RawState>::default())
+                .run_if(transition_pending::<T>),
         ));
 
         schedule
@@ -296,12 +304,15 @@ macro_rules! impl_state_set_sealed_tuples {
                         $(.after(ApplyStateTransition::<$param::RawState>::default()))*,
                     ExitSchedules::<T>::default()
                         .in_set(StateTransitionSystems::ExitSchedules)
-                        $(.before(ExitSchedules::<$param::RawState>::default()))*,
+                        $(.before(ExitSchedules::<$param::RawState>::default()))*
+                        .run_if(transition_pending::<T>),
                     TransitionSchedules::<T>::default()
-                        .in_set(StateTransitionSystems::TransitionSchedules),
+                        .in_set(StateTransitionSystems::TransitionSchedules)
+                        .run_if(transition_pending::<T>),
                     EnterSchedules::<T>::default()
                         .in_set(StateTransitionSystems::EnterSchedules)
-                        $(.after(EnterSchedules::<$param::RawState>::default()))*,
+                        $(.after(EnterSchedules::<$param::RawState>::default()))*
+                        .run_if(transition_pending::<T>),
                 ));
 
                 schedule
@@ -363,12 +374,15 @@ macro_rules! impl_state_set_sealed_tuples {
                         $(.after(ApplyStateTransition::<$param::RawState>::default()))*,
                     ExitSchedules::<T>::default()
                         .in_set(StateTransitionSystems::ExitSchedules)
-                        $(.before(ExitSchedules::<$param::RawState>::default()))*,
+                        $(.before(ExitSchedules::<$param::RawState>::default()))*
+                        .run_if(transition_pending::<T>),
                     TransitionSchedules::<T>::default()
-                        .in_set(StateTransitionSystems::TransitionSchedules),
+                        .in_set(StateTransitionSystems::TransitionSchedules)
+                        .run_if(transition_pending::<T>),
                     EnterSchedules::<T>::default()
                         .in_set(StateTransitionSystems::EnterSchedules)
-                        $(.after(EnterSchedules::<$param::RawState>::default()))*,
+                        $(.after(EnterSchedules::<$param::RawState>::default()))*
+                        .run_if(transition_pending::<T>),
                 ));
 
                 schedule

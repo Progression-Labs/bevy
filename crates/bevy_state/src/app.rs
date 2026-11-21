@@ -5,9 +5,9 @@ use log::warn;
 
 use crate::{
     state::{
-        setup_state_transitions_in_world, ComputedStates, FreelyMutableState, NextState,
-        PreviousState, State, StateTransition, StateTransitionEvent, StateTransitionSystems,
-        States, SubStates,
+        setup_state_transitions_in_world, ComputedStates, EnterSchedules, ExitSchedules,
+        FreelyMutableState, NextState, PreviousState, State, StateTransition, StateTransitionEvent,
+        StateTransitionSystems, States, SubStates, TransitionSchedules,
     },
     state_scoped::{
         despawn_entities_on_enter_state, despawn_entities_on_exit_state,
@@ -252,7 +252,9 @@ fn enable_state_scoped_entities<S: States>(app: &mut SubApp) {
 
     // Note: We work with `StateTransition` in set
     // `StateTransitionSystems::ExitSchedules` rather than `OnExit`, because
-    // `OnExit` only runs for one specific variant of the state.
+    // `OnExit` only runs for one specific variant of the state. Each goes in its state's own
+    // `ExitSchedules::<S>` (and `TransitionSchedules`, `EnterSchedules`) too, whose run condition
+    // skips them on a frame where `S` did not transition.
     app.add_systems(
         StateTransition,
         (
@@ -260,7 +262,8 @@ fn enable_state_scoped_entities<S: States>(app: &mut SubApp) {
             disable_entities_on_exit_state::<S>,
             enable_entities_on_exit_state::<S>,
         )
-            .in_set(StateTransitionSystems::ExitSchedules),
+            .in_set(StateTransitionSystems::ExitSchedules)
+            .in_set(ExitSchedules::<S>::default()),
     )
     // Note: We work with `StateTransition` in set
     // `StateTransitionSystems::EnterSchedules` rather than `OnEnter`, because
@@ -272,7 +275,8 @@ fn enable_state_scoped_entities<S: States>(app: &mut SubApp) {
             disable_entities_on_enter_state::<S>,
             enable_entities_on_enter_state::<S>,
         )
-            .in_set(StateTransitionSystems::EnterSchedules),
+            .in_set(StateTransitionSystems::EnterSchedules)
+            .in_set(EnterSchedules::<S>::default()),
     )
     .add_systems(
         StateTransition,
@@ -281,7 +285,8 @@ fn enable_state_scoped_entities<S: States>(app: &mut SubApp) {
             disable_entities_when_state::<S>,
             enable_entities_when_state::<S>,
         )
-            .in_set(StateTransitionSystems::TransitionSchedules),
+            .in_set(StateTransitionSystems::TransitionSchedules)
+            .in_set(TransitionSchedules::<S>::default()),
     );
 }
 
@@ -396,5 +401,65 @@ mod tests {
         let last = reader.read(events).last().unwrap();
         assert_eq!(last.exited, None);
         assert_eq!(last.entered, Some(TestState::C));
+    }
+
+    /// A state's exit, transition and enter sets (the schedules' runners and its state-scoped
+    /// entities' systems) are skipped on a frame where it did not transition, and run on one
+    /// where it did, a same-state transition included.
+    #[test]
+    fn a_states_transition_systems_run_only_when_it_transitions() {
+        use crate::state::{EnterSchedules, ExitSchedules, NextState, TransitionSchedules};
+        use crate::state_scoped::DespawnOnExit;
+        use bevy_ecs::prelude::{ResMut, Resource};
+        use bevy_ecs::schedule::IntoScheduleConfigs;
+
+        #[derive(Resource, Default)]
+        struct Runs(u32, u32, u32);
+
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin);
+        app.init_state::<TestState>();
+        app.init_resource::<Runs>();
+        app.add_systems(
+            StateTransition,
+            (
+                (|mut r: ResMut<Runs>| r.0 += 1).in_set(ExitSchedules::<TestState>::default()),
+                (|mut r: ResMut<Runs>| r.1 += 1)
+                    .in_set(TransitionSchedules::<TestState>::default()),
+                (|mut r: ResMut<Runs>| r.2 += 1).in_set(EnterSchedules::<TestState>::default()),
+            ),
+        );
+        let scoped = app.world_mut().spawn(DespawnOnExit(TestState::A)).id();
+        let runs = |app: &App| {
+            let r = app.world().resource::<Runs>();
+            (r.0, r.1, r.2)
+        };
+
+        // The first update enters the initial state; the next ones have nothing to apply.
+        app.update();
+        assert_eq!(runs(&app), (1, 1, 1));
+        app.update();
+        app.update();
+        assert_eq!(runs(&app), (1, 1, 1), "no transition: the sets are skipped");
+        assert!(app.world().get_entity(scoped).is_ok());
+
+        app.world_mut()
+            .resource_mut::<NextState<TestState>>()
+            .set(TestState::B);
+        app.update();
+        assert_eq!(runs(&app), (2, 2, 2), "a transition runs them");
+        assert!(
+            app.world().get_entity(scoped).is_err(),
+            "the state-scoped entity went with A"
+        );
+        app.update();
+        assert_eq!(runs(&app), (2, 2, 2));
+
+        // A same-state transition still writes its event, so the sets run for it.
+        app.world_mut()
+            .resource_mut::<NextState<TestState>>()
+            .set(TestState::B);
+        app.update();
+        assert_eq!(runs(&app), (3, 3, 3));
     }
 }

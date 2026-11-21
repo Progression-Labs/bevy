@@ -961,6 +961,19 @@ mod tests {
 
         world.insert_resource(schedules);
 
+        // The sets run only on a frame where their state transitioned: say each did, staying
+        // where it is (the order is what is tested, not the transition).
+        fn same<S: States>(world: &mut World, state: S) {
+            world.write_message(StateTransitionEvent {
+                exited: Some(state.clone()),
+                entered: Some(state),
+                allow_same_state_transitions: true,
+            });
+        }
+        same(&mut world, SimpleState::B(true));
+        same(&mut world, SubState::One);
+        same(&mut world, TransitionTestingComputedState::IsA);
+
         world.run_schedule(StateTransition);
 
         let transitions = &world.resource::<TransitionTracker>().0;
