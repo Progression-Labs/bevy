@@ -482,6 +482,44 @@ fn dynamic_handle_template() {
     assert_eq!(world.entity(id).get::<Sprite>().unwrap().0, expected);
 }
 
+/// What a document sets is told before anything is resolved or loaded: every entity's components,
+/// its children's and its `patch #Name` blocks', and none of its base's (`a.bsn` is never loaded
+/// here: it reports its own once it is).
+#[test]
+fn dynamic_authored_components() {
+    let app = test_app();
+    let b = scene(
+        &app,
+        "b.bsn",
+        ":\"a.bsn\"\npatch #X { Position { y: 5.0 } }\nChildren [ #C TupleStruct(1.0, 2) Children [ Marker ] ]",
+    );
+    let mut authored = Vec::new();
+    b.authored_components(&mut |type_id| authored.push(type_id));
+    authored.sort();
+    authored.dedup();
+    let mut expected = vec![
+        TypeId::of::<Position>(),
+        TypeId::of::<Name>(),
+        TypeId::of::<TupleStruct>(),
+        TypeId::of::<Marker>(),
+    ];
+    expected.sort();
+    assert_eq!(authored, expected);
+
+    // Through the asset's box, as a caller holding a loaded `ScenePatch` reads it.
+    let boxed: Box<dyn Scene> = Box::new(b);
+    let mut through_box = Vec::new();
+    boxed.authored_components(&mut |type_id| through_box.push(type_id));
+    through_box.sort();
+    through_box.dedup();
+    assert_eq!(through_box, expected);
+
+    // A scene that cannot tell without resolving reports nothing.
+    let mut from_macro = Vec::new();
+    bsn! { Marker }.authored_components(&mut |type_id| from_macro.push(type_id));
+    assert!(from_macro.is_empty());
+}
+
 #[test]
 fn dynamic_hierarchy() {
     let mut app = test_app();

@@ -65,6 +65,17 @@ pub trait Scene: SceneBox {
     ///
     /// [`Asset`]: bevy_asset::Asset
     fn register_dependencies(&self, _dependencies: &mut SceneDependencies) {}
+
+    /// Calls `components` with the [`TypeId`] of every component this [`Scene`] sets on any of its
+    /// entities, read from the scene as it is, before its dependencies have loaded or it has been
+    /// resolved. A base or another scene it includes by path is that scene's to report: it is
+    /// among [`Scene::register_dependencies`], loaded as an asset of its own.
+    ///
+    /// This lets a caller start work a scene's contents call for while the scene's assets are
+    /// still loading. A scene that cannot tell what it sets without being resolved (the default,
+    /// and the `bsn!` macro's scenes) reports nothing, so an empty report means "not known", not
+    /// "none".
+    fn authored_components(&self, _components: &mut dyn FnMut(TypeId)) {}
 }
 
 /// Boxed version of [`Scene`], which enables implementing [`Scene`] for [`Box<dyn Scene>`]. Most
@@ -91,6 +102,9 @@ pub trait SceneBox: Send + Sync + 'static {
 
     /// See [`Scene::register_dependencies`].
     fn register_dependencies_box(&self, _dependencies: &mut SceneDependencies);
+
+    /// See [`Scene::authored_components`].
+    fn authored_components_box(&self, components: &mut dyn FnMut(TypeId));
 }
 
 impl<S: Scene + Sized> SceneBox for S {
@@ -107,6 +121,11 @@ impl<S: Scene + Sized> SceneBox for S {
     fn register_dependencies_box(&self, dependencies: &mut SceneDependencies) {
         self.register_dependencies(dependencies);
     }
+
+    #[inline]
+    fn authored_components_box(&self, components: &mut dyn FnMut(TypeId)) {
+        self.authored_components(components);
+    }
 }
 
 impl<T: ?Sized + SceneBox> Scene for Box<T> {
@@ -120,6 +139,10 @@ impl<T: ?Sized + SceneBox> Scene for Box<T> {
 
     fn register_dependencies(&self, dependencies: &mut SceneDependencies) {
         (**self).register_dependencies_box(dependencies);
+    }
+
+    fn authored_components(&self, components: &mut dyn FnMut(TypeId)) {
+        (**self).authored_components_box(components);
     }
 }
 

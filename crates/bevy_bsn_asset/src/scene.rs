@@ -170,6 +170,44 @@ impl Scene for DynamicScene {
             dependencies.register_erased(*type_id, path.clone());
         }
     }
+
+    /// Every component the document sets: on each entity, its children's and its `patch #Name`
+    /// blocks', read from the lowered document (nothing is resolved). A base it includes reports
+    /// its own, as the asset it is loaded as.
+    fn authored_components(&self, components: &mut dyn FnMut(TypeId)) {
+        authored_by_entity(&self.0.root, components);
+    }
+}
+
+/// The components `entity` and everything below it in the document set.
+fn authored_by_entity(entity: &DynamicSceneEntity, components: &mut dyn FnMut(TypeId)) {
+    if entity.name.is_some() {
+        components(TypeId::of::<Name>());
+    }
+    for patch in &entity.patches {
+        components(patch.component_type_id);
+    }
+    for patch in &entity.descendant_patches {
+        authored_by_descendant_patch(patch, components);
+    }
+    for relation in &entity.relations {
+        for child in &relation.children {
+            authored_by_entity(child, components);
+        }
+    }
+}
+
+/// The components a `patch #Name { … }` block and the blocks nested in it set.
+fn authored_by_descendant_patch(
+    patch: &DynamicDescendantPatch,
+    components: &mut dyn FnMut(TypeId),
+) {
+    for component in &patch.patches {
+        components(component.component_type_id);
+    }
+    for nested in &patch.descendant_patches {
+        authored_by_descendant_patch(nested, components);
+    }
 }
 
 /// Resolves one entity of the document into `scene`, recursing into its relations.
