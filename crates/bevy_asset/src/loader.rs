@@ -604,6 +604,15 @@ impl<'a> LoadContext<'a> {
         &self.asset_path
     }
 
+    /// The [`AssetServer`] this load runs on, for a loader that needs it while it loads (one that
+    /// spawns a scene into a world of its own, which resolves against a server). A loader must not
+    /// keep it past the load: the server holds its loaders, so a loader holding the server is a
+    /// cycle that keeps the server, and everything it holds (every loader, the app's type registry
+    /// in the scene loaders, its channels and asset table), alive after its app is dropped.
+    pub fn asset_server(&self) -> &AssetServer {
+        self.asset_server
+    }
+
     /// Reads the asset at the given path and returns its bytes
     pub async fn read_asset_bytes<'b, 'c>(
         &'b mut self,
