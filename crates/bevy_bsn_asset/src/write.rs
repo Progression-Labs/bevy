@@ -9,7 +9,9 @@
 //!   what differs from a fresh copy of the base. The base's own descendants belong to the base
 //!   file, which is where they are edited; only what this file's `patch #Name { … }` blocks set
 //!   on them (recorded as [`PatchedComponents`]) and still differs from the fresh copy is written,
-//!   as `patch` blocks under names that find each descendant;
+//!   as `patch` blocks under names that find each descendant. The base's descendants are told
+//!   from the file's own by pairing names with the fresh copy ([`base_spawned`]), wherever they
+//!   stand among the entity's children;
 //! * a handle as its asset path, or, for a handle with no path, the asset's value inline;
 //! * an [`Entity`] pointing inside the tree as `#name`;
 //! * `Name` as the entity's `#name`, and `Children` as its relation block.
@@ -110,6 +112,25 @@ pub enum BsnWriteError {
     /// A patched descendant of a base that no chain of unique names finds.
     #[error("a descendant of base `{0}` was patched, but no chain of unique names finds it")]
     UnnamedDescendant(String),
+}
+
+/// The live entities below `entity` that its `:"base.bsn"` spawned, at every depth (each paired
+/// by name with its counterpart in a fresh copy of the base, as the writer pairs them): what a
+/// save of `entity` writes only as `patch` blocks, and what a file cannot remove, since a base's
+/// descendant comes back with the base. Empty when `entity` inherits nothing.
+pub fn base_spawned(world: &mut World, entity: Entity) -> Result<HashSet<Entity>, BsnWriteError> {
+    let Some(base) = world.get::<SceneBase>(entity).map(|b| b.0.clone()) else {
+        return Ok(HashSet::default());
+    };
+    let mut bases = Bases::default();
+    let result = bases.get(world, &base).map(|fresh| {
+        pair_descendants(world, entity, fresh, &HashSet::default())
+            .into_iter()
+            .map(|(live, _)| live)
+            .collect()
+    });
+    bases.despawn(world);
+    result
 }
 
 /// Writes `root` and the entities below it as a `.bsn` document (see the module docs).
@@ -369,17 +390,25 @@ impl<'a> Writer<'a> {
             _ => Vec::new(),
         };
 
-        // A base's own children come first; only those after them are this file's.
-        let skip = base_root
-            .and_then(|b| world.get::<Children>(b))
-            .map_or(0, |c| c.len());
+        // The base's own children are those that pair by name with the fresh copy's; the rest
+        // are this file's. Counted off the front, a child that is not the file's standing before
+        // them (a player put under a level's root, which a reload of its scene leaves first) or a
+        // child of the base despawned since cost one of the file's own children.
+        let inherited: HashSet<Entity> = base_root
+            .map(|fresh| {
+                pair_children(world, entity, fresh, &self.settings.skip_entities)
+                    .into_iter()
+                    .map(|(live, _)| live)
+                    .collect()
+            })
+            .unwrap_or_default();
         let kids: Vec<Entity> = world
             .get::<Children>(entity)
-            .map(|c| c.iter().skip(skip).copied().collect())
+            .map(|c| c.iter().copied().collect())
             .unwrap_or_default();
         let mut children = Vec::new();
         for kid in kids {
-            if self.settings.skip_entities.contains(&kid) {
+            if self.settings.skip_entities.contains(&kid) || inherited.contains(&kid) {
                 continue;
             }
             children.push(self.node(world, kid, bases)?);
@@ -404,33 +433,7 @@ impl<'a> Writer<'a> {
         fresh: Entity,
         base: &str,
     ) -> Result<Vec<PatchBlock>, BsnWriteError> {
-        // A base spawns the same tree every time, so a descendant's counterpart is the sibling of
-        // the same name, the n-th of a repeated name pairing with the n-th: a sibling despawned or
-        // reordered since does not shift the others. The entity's own children come after the
-        // base's and pair with what is left over, nothing of the same name.
-        let mut pairs = Vec::new();
-        let mut stack = vec![(entity, fresh)];
-        while let Some((live, copy)) = stack.pop() {
-            let live_children = world.get::<Children>(live).map(|c| &**c).unwrap_or(&[]);
-            let mut copy_children: Vec<Option<Entity>> = world
-                .get::<Children>(copy)
-                .map(|c| c.iter().copied().map(Some).collect())
-                .unwrap_or_default();
-            let name = |entity: Entity| world.get::<Name>(entity).map(Name::as_str);
-            let first = pairs.len();
-            for &live in live_children {
-                let wanted = name(live);
-                let Some(copy) = copy_children
-                    .iter_mut()
-                    .find(|copy| copy.is_some_and(|copy| name(copy) == wanted))
-                    .and_then(Option::take)
-                else {
-                    continue;
-                };
-                pairs.push((live, copy));
-            }
-            stack.extend(pairs[first..].iter().rev().copied());
-        }
+        let pairs = pair_descendants(world, entity, fresh, &self.settings.skip_entities);
         let mut blocks = Vec::new();
         for (live, copy) in pairs {
             let Some(patched) = world.get::<PatchedComponents>(live) else {
@@ -821,6 +824,59 @@ impl<'a> Writer<'a> {
             _ => return Err(unsupported()),
         })
     }
+}
+
+/// The children of `live` (an entity inheriting a base, or a descendant the base spawned) that
+/// the base spawned, each with its counterpart among `copy`'s (the same place in a fresh copy of
+/// the base). A base spawns the same tree every time, so a child's counterpart is the sibling of
+/// the same name, the n-th of a repeated name pairing with the n-th: a sibling despawned or
+/// reordered since does not shift the others. The entity's own children pair with what is left
+/// over, nothing of the same name; `skip` (what is never written: a player, an editor's camera)
+/// pairs with nothing.
+fn pair_children(
+    world: &World,
+    live: Entity,
+    copy: Entity,
+    skip: &HashSet<Entity>,
+) -> Vec<(Entity, Entity)> {
+    let name = |entity: Entity| world.get::<Name>(entity).map(Name::as_str);
+    let mut copy_children: Vec<Option<Entity>> = world
+        .get::<Children>(copy)
+        .map(|c| c.iter().copied().map(Some).collect())
+        .unwrap_or_default();
+    let mut pairs = Vec::new();
+    for &live in world.get::<Children>(live).map(|c| &**c).unwrap_or(&[]) {
+        if skip.contains(&live) {
+            continue;
+        }
+        let wanted = name(live);
+        if let Some(copy) = copy_children
+            .iter_mut()
+            .find(|copy| copy.is_some_and(|copy| name(copy) == wanted))
+            .and_then(Option::take)
+        {
+            pairs.push((live, copy));
+        }
+    }
+    pairs
+}
+
+/// [`pair_children`] down the whole tree the base spawned below `entity`, parents before their
+/// children.
+fn pair_descendants(
+    world: &World,
+    entity: Entity,
+    fresh: Entity,
+    skip: &HashSet<Entity>,
+) -> Vec<(Entity, Entity)> {
+    let mut pairs = Vec::new();
+    let mut stack = vec![(entity, fresh)];
+    while let Some((live, copy)) = stack.pop() {
+        let first = pairs.len();
+        pairs.extend(pair_children(world, live, copy, skip));
+        stack.extend(pairs[first..].iter().rev().copied());
+    }
+    pairs
 }
 
 /// `Some(_)` of an `Option`-shaped enum: a unit `None` beside a one-field tuple `Some`.

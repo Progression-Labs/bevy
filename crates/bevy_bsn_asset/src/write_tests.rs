@@ -162,6 +162,70 @@ fn an_inheriting_entity_writes_its_base_and_only_what_differs() {
     assert_eq!(world.query::<&Position>().iter(world).count(), positions + 2);
 }
 
+/// A level's root inheriting a base (an account's home over the game's): a child that is no part
+/// of the file standing first (a player, whom a reload of the scene leaves before what it
+/// spawns again) and a child of the base despawned since cost none of the file's own children,
+/// which counting the base's children off the front did.
+#[test]
+fn an_inheriting_root_writes_all_its_own_children_wherever_the_bases_stand() {
+    let mut app = base_asset_app("Marker\nChildren [ #X\n--\n#W ]");
+    let _base = app
+        .world()
+        .resource::<bevy_asset::AssetServer>()
+        .load::<bevy_scene::ScenePatch>("a.bsn");
+    let source = scene(
+        &app,
+        "b.bsn",
+        ":\"a.bsn\"\nChildren [ #Y\nPosition { x: 9.0 }\n--\n#Z\nPosition { x: 7.0 } ]",
+    );
+    let root = app.world_mut().spawn_scene(source).unwrap().id();
+    let world = app.world_mut();
+    let x = named(world, root, "X");
+    assert_eq!(
+        crate::base_spawned(world, root).unwrap(),
+        [x, named(world, root, "W")].into_iter().collect(),
+        "what the base spawned, and nothing of the file's"
+    );
+    // Someone not written, first among the children.
+    let player = world
+        .spawn(Position {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .id();
+    world.entity_mut(root).insert_children(0, &[player]);
+    let settings = WriteSettings {
+        skip_entities: [player].into_iter().collect(),
+        ..Default::default()
+    };
+    let text = write_scene_text(world, root, &settings).unwrap();
+    assert!(
+        text.contains("#Y") && text.contains("#Z"),
+        "both of the file's own:\n{text}"
+    );
+    assert!(
+        !text.contains("#W"),
+        "the base's child belongs to the base:\n{text}"
+    );
+    assert!(
+        !text.contains("x: 1.0"),
+        "the player is not written:\n{text}"
+    );
+    // Gone, and one of the base's children despawned.
+    world.despawn(player);
+    world.despawn(x);
+    let text = write(world, root);
+    assert!(
+        text.contains("#Y") && text.contains("#Z"),
+        "both of the file's own:\n{text}"
+    );
+    assert!(
+        !text.contains("#W"),
+        "the base's child belongs to the base:\n{text}"
+    );
+}
+
 mod nested_refs {
     use bevy_ecs::{entity::Entity, hierarchy::Children, name::Name, prelude::Component, reflect::{ReflectComponent, ReflectFromTemplate}, template::FromTemplate};
     use bevy_reflect::Reflect;
